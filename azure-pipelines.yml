@@ -1,0 +1,117 @@
+trigger:
+- development
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+variables:
+  connectionName: dev
+  appServiceName: TuneQuestMusicMicroservice
+  resourceGroupName: TuneQuest
+  buildArtifactName: 'TuneQuestBackend-MusicMicroservice-1.0-SNAPSHOT'
+  containerRegistry: 'DockerHubConnection'
+  repositoryName: 'costin06/tunequest-musicmicroservice'
+
+stages:
+
+- stage: SonarCloud
+  displayName: 'SonarCloud'
+  jobs:
+  - job: Build_and_Test
+    displayName: 'Build and Test'
+    steps:
+    - checkout: self
+      fetchDepth: 0
+
+    - task: SonarCloudPrepare@3
+      inputs:
+        SonarQube: 'MusicMicroservice-SonarCloud'
+        organization: 'i494329'
+        scannerMode: 'other'
+        extraProperties: |
+          sonar.projectKey=I494329_TuneQuestBackend-MusicMicroservice
+          sonar.projectName=TuneQuestBackend-MusicMicroservice
+          sonar.coverage.minimumThreshold=80
+
+    - task: Gradle@3
+      displayName: 'Gradle Build'
+      inputs:
+        gradleWrapperFile: 'gradlew'
+        tasks: 'build'
+        publishJUnitResults: true
+        testResultsFiles: '**/jacocoTestReport.xml'
+        codeCoverageToolOption: 'JaCoCo'
+        codeCoverageClassFilesDirectories: 'build/classes/java/main/'
+        javaHomeOption: 'JDKVersion'
+        jdkVersionOption: '1.17'
+        sonarQubeRunAnalysis: true
+        sqGradlePluginVersionChoice: 'build'
+        spotBugsAnalysis: false
+
+    - task: PublishCodeCoverageResults@2
+      displayName: 'Publish Code Coverage Results'
+      inputs:
+        summaryFileLocation: '$(System.DefaultWorkingDirectory)/build/reports/jacoco/test/jacocoTestReport.xml'
+
+    - task: SonarQubePublish@7
+      displayName: 'Publish SonarQube Results'
+      inputs:
+        pollingTimeoutSec: '300'
+
+    - task: PublishBuildArtifacts@1
+      displayName: 'Publish Artifact: Build'
+      inputs:
+        pathToPublish: '$(System.DefaultWorkingDirectory)/build/libs'
+        artifactName: '$(buildArtifactName)'
+
+- stage: Test
+  displayName: 'Test'
+  jobs:
+  - job: Test
+    displayName: 'Run Tests'
+    steps:
+    - task: Gradle@3
+      displayName: 'Gradle Test'
+      inputs:
+        gradleWrapperFile: 'gradlew'
+        tasks: 'test'
+
+- stage: DockerBuildAndPush
+  displayName: 'Build and Push Docker Image'
+  jobs:
+  - job: Build_Push_Docker
+    displayName: 'Build and Push Docker Image to Docker Hub'
+    steps:
+    - checkout: self
+
+    - task: Docker@2
+      displayName: 'Build and Push Docker Image'
+      inputs:
+        containerRegistry: '$(containerRegistry)'
+        repository: '$(repositoryName)'
+        command: 'buildAndPush'
+        Dockerfile: '**/Dockerfile'
+        tags: |
+          $(Build.BuildId)
+          1.0
+
+- stage: Deploy
+  displayName: Deploy
+  jobs:
+  - job: Deploy
+    displayName: 'Deploy to Azure App Service'
+    steps:
+    - task: DownloadPipelineArtifact@2
+      displayName: 'Download Build Artifacts'
+      inputs:
+        buildType: 'current'
+        artifactName: '$(buildArtifactName)'
+        targetPath: '$(Pipeline.Workspace)/drop'
+
+    - task: AzureWebAppContainer@1  
+      displayName: 'Configure Azure App Service to Use Docker Image'
+      inputs:
+        azureSubscription: '$(connectionName)'
+        appName: '$(appServiceName)'
+        resourceGroupName: '$(resourceGroupName)'
+        imageName: '$(repositoryName):2.0'
